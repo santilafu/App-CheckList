@@ -10,7 +10,7 @@
    ========================================================================= */
 
 import { ESTADOS } from "../data/plantillas";
-import { calcularResumen, resultadoDe, fechaHora } from "./helpers";
+import { calcularResumen, resultadoDe, fechaHora, numeroActa } from "./helpers";
 
 const MARGEN = 14;          // mm
 const ANCHO_PAGINA = 210;   // A4
@@ -94,6 +94,12 @@ export async function generarPDFActa(registro, empresaFallback) {
   doc.setFont("helvetica", "normal").setFontSize(10).setTextColor(...COLOR.slate500);
   doc.text(registro.plantilla, MARGEN, y + 9);
 
+  // Nº de acta bajo el sello.
+  if (registro.numero) {
+    doc.setFont("helvetica", "normal").setFontSize(9).setTextColor(...COLOR.slate500);
+    doc.text(`Nº ${numeroActa(registro.numero)}`, ANCHO_PAGINA - MARGEN, y + 9, { align: "right" });
+  }
+
   // Línea naranja separadora.
   y += 13;
   doc.setDrawColor(...COLOR.orange).setLineWidth(0.8);
@@ -103,9 +109,11 @@ export async function generarPDFActa(registro, empresaFallback) {
   // ---- Rejilla de datos (2 columnas) ----
   const datos = [
     ["Equipo / Ubicación", registro.cabecera.equipo || "—"],
-    ["Inspector", registro.cabecera.inspector || "—"],
-    ["Fecha", registro.cabecera.fecha || "—"],
+    ["Inspector / Operario", registro.cabecera.inspector || "—"],
+    ["Responsable", registro.cabecera.responsable || "—"],
     ["Resumen", `${r.ok} OK / ${r.ko} No OK / ${r.na} N/A`],
+    ["Fecha", registro.cabecera.fecha || "—"],
+    ["Hora", registro.cabecera.hora || "—"],
   ];
   const colW = ANCHO_UTIL / 2;
   for (let i = 0; i < datos.length; i++) {
@@ -156,6 +164,18 @@ export async function generarPDFActa(registro, empresaFallback) {
   });
   y = doc.lastAutoTable.finalY + 8;
 
+  // ---- Observaciones generales ----
+  if ((registro.observaciones || "").trim()) {
+    const lineas = doc.setFontSize(9).splitTextToSize(registro.observaciones.trim(), ANCHO_UTIL);
+    asegurarEspacio(8 + lineas.length * 4.5);
+    doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(...COLOR.slate900);
+    doc.text("Observaciones", MARGEN, y);
+    y += 5;
+    doc.setFont("helvetica", "normal").setFontSize(9).setTextColor(...COLOR.slate700);
+    doc.text(lineas, MARGEN, y);
+    y += lineas.length * 4.5 + 4;
+  }
+
   // ---- Evidencias fotográficas ----
   const fotos = registro.items
     .map((it, i) => ({ n: i + 1, texto: it.texto, foto: resultadoDe(registro.resultados, it.id).foto }))
@@ -190,24 +210,52 @@ export async function generarPDFActa(registro, empresaFallback) {
     }
   }
 
-  // ---- Firma ----
-  if (registro.firma) {
-    const dims = await dimsImagen(registro.firma);
-    const maxW = 70, maxH = 28;
-    let w = maxW, h = maxH;
-    if (dims) {
-      const escala = Math.min(maxW / dims.w, maxH / dims.h);
-      w = dims.w * escala;
-      h = dims.h * escala;
+  // ---- Firmas (operario y responsable, en dos columnas) ----
+  const firmantes = [
+    { titulo: "FIRMA DEL OPERARIO", firma: registro.firma, nombre: registro.cabecera.inspector },
+    { titulo: "FIRMA DEL RESPONSABLE", firma: registro.firmaResponsable, nombre: registro.cabecera.responsable },
+  ].filter((f) => f.firma || (f.nombre || "").trim());
+
+  if (firmantes.length) {
+    asegurarEspacio(36);
+    const colW = ANCHO_UTIL / 2;
+    const yBase = y;
+    let maxAlto = 0;
+
+    for (let i = 0; i < firmantes.length; i++) {
+      const f = firmantes[i];
+      const x = MARGEN + (i % 2) * colW;
+      let yy = yBase;
+
+      doc.setFont("helvetica", "bold").setFontSize(8).setTextColor(...COLOR.slate400);
+      doc.text(f.titulo, x, yy);
+      yy += 3;
+
+      const maxW = colW - 12, maxH = 24;
+      if (f.firma) {
+        const dims = await dimsImagen(f.firma);
+        let w = maxW, h = maxH;
+        if (dims) {
+          const escala = Math.min(maxW / dims.w, maxH / dims.h);
+          w = dims.w * escala;
+          h = dims.h * escala;
+        }
+        try { doc.addImage(f.firma, "PNG", x, yy, w, h); } catch { /* ignore */ }
+        yy += h;
+      } else {
+        yy += maxH; // hueco para firma manuscrita
+      }
+
+      yy += 2;
+      doc.setDrawColor(...COLOR.slate200).setLineWidth(0.2);
+      doc.line(x, yy, x + maxW, yy);
+      yy += 4;
+      doc.setFont("helvetica", "normal").setFontSize(9).setTextColor(...COLOR.slate700);
+      doc.text(f.nombre || "—", x, yy);
+
+      maxAlto = Math.max(maxAlto, yy - yBase);
     }
-    asegurarEspacio(h + 10);
-    doc.setFont("helvetica", "bold").setFontSize(8).setTextColor(...COLOR.slate400);
-    doc.text("FIRMA", MARGEN, y);
-    y += 3;
-    try { doc.addImage(registro.firma, "PNG", MARGEN, y, w, h); } catch { /* ignore */ }
-    y += h + 2;
-    doc.setDrawColor(...COLOR.slate200).setLineWidth(0.2);
-    doc.line(MARGEN, y, MARGEN + maxW, y);
+    y = yBase + maxAlto + 4;
   }
 
   // ---- Pie con numeración de páginas ----

@@ -31,12 +31,16 @@ export function Marco({ children, titulo, onVolver, onAjustes, tema, onToggleTem
   );
 }
 
-export function Campo({ label, valor, onCambio, placeholder, tipo = "text" }) {
+export function Campo({ label, valor, onCambio, placeholder, tipo = "text", multilinea = false, filas = 3 }) {
+  const clases = "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-800 outline-none focus:border-orange-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100";
   return (
     <label className="block">
       <span className="mb-1 block text-xs font-bold uppercase tracking-wider text-slate-400">{label}</span>
-      <input type={tipo} value={valor} onChange={(e) => onCambio(e.target.value)} placeholder={placeholder}
-        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-800 outline-none focus:border-orange-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100" />
+      {multilinea ? (
+        <textarea value={valor} onChange={(e) => onCambio(e.target.value)} placeholder={placeholder} rows={filas} className={clases + " resize-y"} />
+      ) : (
+        <input type={tipo} value={valor} onChange={(e) => onCambio(e.target.value)} placeholder={placeholder} className={clases} />
+      )}
     </label>
   );
 }

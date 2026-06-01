@@ -4,7 +4,7 @@ import { PLANTILLAS_BASE, ESTADOS } from "./data/plantillas";
 import { almacen } from "./lib/almacen";
 import {
   calcularResumen, resultadosVacios, resultadoDe,
-  hoy, ahora, uid, fechaHora, descargar, campoCSV,
+  hoy, horaActual, numeroActa, ahora, uid, fechaHora, descargar, campoCSV,
 } from "./lib/helpers";
 import { Marco, Campo, DatoActa, Pildora } from "./components/ui";
 import { Firma } from "./components/Firma";
@@ -43,6 +43,10 @@ export default function App() {
   const [empresa, setEmpresa] = useState(() => almacen.leer("empresa", ""));
   useEffect(() => { almacen.guardar("empresa", empresa); }, [empresa]);
 
+  // Contador correlativo de actas (solo se incrementa al crear actas nuevas).
+  const [contadorActa, setContadorActa] = useState(() => almacen.leer("contadorActa", 0));
+  useEffect(() => { almacen.guardar("contadorActa", contadorActa); }, [contadorActa]);
+
   // Tema claro/oscuro. Por defecto seguimos la preferencia del sistema; una vez
   // el usuario elige, se respeta su elección (persistida).
   const [tema, setTema] = useState(() => {
@@ -72,10 +76,16 @@ export default function App() {
 
   // Inspección en curso
   const [plantilla, setPlantilla] = useState(PLANTILLAS_BASE[0]);
-  const [cabecera, setCabecera] = useState({ inspector: "", equipo: "", fecha: hoy() });
+  const [cabecera, setCabecera] = useState({ inspector: "", equipo: "", fecha: hoy(), hora: horaActual(), responsable: "" });
   const [resultados, setResultados] = useState({});
+  const [observaciones, setObservaciones] = useState("");
   const [firma, setFirma] = useState(null);
   const [firmaInicial, setFirmaInicial] = useState(null);
+  const [firmaResponsable, setFirmaResponsable] = useState(null);
+  const [firmaResponsableInicial, setFirmaResponsableInicial] = useState(null);
+
+  // Cabecera vacía para una inspección nueva (con fecha/hora actuales).
+  const cabeceraNueva = () => ({ inspector: "", equipo: "", fecha: hoy(), hora: horaActual(), responsable: "" });
 
   const inputImportar = useRef(null);
 
@@ -83,29 +93,33 @@ export default function App() {
   // editando un acta, por robustez al salir y volver).
   useEffect(() => {
     if (vista !== "rellenar") return;
-    const b = { plantilla, cabecera, resultados, firma, editandoId };
+    const b = { plantilla, cabecera, resultados, observaciones, firma, firmaResponsable, editandoId };
     almacen.guardar("borrador", b);
     // Autoguardado intencionado: reflejamos el borrador en estado para que la
     // tarjeta "Inspección en curso" del inicio quede al día al volver.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setBorrador(b);
-  }, [vista, plantilla, cabecera, resultados, firma, editandoId]);
+  }, [vista, plantilla, cabecera, resultados, observaciones, firma, firmaResponsable, editandoId]);
 
   function limpiarBorrador() { almacen.guardar("borrador", null); setBorrador(null); }
 
   function empezarConPlantilla(plt) {
     setPlantilla(plt);
-    setCabecera({ inspector: "", equipo: "", fecha: hoy() });
+    setCabecera(cabeceraNueva());
     setResultados(resultadosVacios(plt));
+    setObservaciones("");
     setFirma(null); setFirmaInicial(null);
+    setFirmaResponsable(null); setFirmaResponsableInicial(null);
     setEditandoId(null);
     setVista("rellenar");
   }
   function continuarBorrador() {
     setPlantilla(borrador.plantilla);
-    setCabecera(borrador.cabecera);
+    setCabecera({ ...cabeceraNueva(), ...borrador.cabecera });
     setResultados(borrador.resultados);
+    setObservaciones(borrador.observaciones || "");
     setFirma(borrador.firma); setFirmaInicial(borrador.firma);
+    setFirmaResponsable(borrador.firmaResponsable || null); setFirmaResponsableInicial(borrador.firmaResponsable || null);
     setEditandoId(borrador.editandoId ?? null);
     setVista("rellenar");
   }
@@ -115,9 +129,11 @@ export default function App() {
   function repetir(registro) {
     const plt = TODAS_PLANTILLAS.find((p) => p.nombre === registro.plantilla) || { id: "tmp", nombre: registro.plantilla, items: registro.items };
     setPlantilla(plt);
-    setCabecera({ inspector: registro.cabecera.inspector, equipo: registro.cabecera.equipo, fecha: hoy() });
+    setCabecera({ ...cabeceraNueva(), inspector: registro.cabecera.inspector, equipo: registro.cabecera.equipo, responsable: registro.cabecera.responsable || "" });
     setResultados(resultadosVacios(plt));
+    setObservaciones("");
     setFirma(null); setFirmaInicial(null);
+    setFirmaResponsable(null); setFirmaResponsableInicial(null);
     setEditandoId(null);
     setVista("rellenar");
   }
@@ -129,9 +145,11 @@ export default function App() {
     const res = {};
     registro.items.forEach((it) => { res[it.id] = { ...resultadoDe(registro.resultados, it.id) }; });
     setPlantilla(plt);
-    setCabecera({ ...registro.cabecera });
+    setCabecera({ ...cabeceraNueva(), ...registro.cabecera });
     setResultados(res);
+    setObservaciones(registro.observaciones || "");
     setFirma(registro.firma); setFirmaInicial(registro.firma);
+    setFirmaResponsable(registro.firmaResponsable || null); setFirmaResponsableInicial(registro.firmaResponsable || null);
     setEditandoId(registro.id);
     setVista("rellenar");
   }
@@ -159,13 +177,16 @@ export default function App() {
     const ts = ahora();
     if (editandoId) {
       // Actualizamos el acta existente conservando su id (fecha de creación),
-      // empresa original, etc., y dejamos constancia de la edición.
+      // su número correlativo, empresa original, etc., y dejamos constancia
+      // de la edición.
       const original = guardadas.find((g) => g.id === editandoId);
-      const actualizado = { ...original, plantilla: plantilla.nombre, cabecera, resultados, firma, items: plantilla.items, editadoEn: ts };
+      const actualizado = { ...original, plantilla: plantilla.nombre, cabecera, resultados, observaciones, firma, firmaResponsable, items: plantilla.items, editadoEn: ts };
       setGuardadas(guardadas.map((g) => (g.id === editandoId ? actualizado : g)));
       setActaVista(actualizado);
     } else {
-      const registro = { id: ts, empresa, plantilla: plantilla.nombre, cabecera, resultados, firma, items: plantilla.items };
+      const numero = contadorActa + 1;
+      setContadorActa(numero);
+      const registro = { id: ts, numero, empresa, plantilla: plantilla.nombre, cabecera, resultados, observaciones, firma, firmaResponsable, items: plantilla.items };
       setGuardadas([registro, ...guardadas]);
       setActaVista(registro);
     }
@@ -201,10 +222,10 @@ export default function App() {
 
   // --- CSV ---
   function exportarCSVTodas() {
-    const cab = ["Fecha", "Empresa", "Plantilla", "Equipo", "Inspector", "Veredicto", "OK", "No OK", "N/A"];
+    const cab = ["Nº", "Fecha", "Hora", "Empresa", "Plantilla", "Equipo", "Inspector", "Responsable", "Veredicto", "OK", "No OK", "N/A"];
     const filas = guardadas.map((g) => {
       const r = calcularResumen(g.items, g.resultados);
-      return [fechaHora(g.id), g.empresa || "", g.plantilla, g.cabecera.equipo, g.cabecera.inspector, r.apto ? "APTO" : "NO APTO", r.ok, r.ko, r.na];
+      return [numeroActa(g.numero), fechaHora(g.id), g.cabecera.hora || "", g.empresa || "", g.plantilla, g.cabecera.equipo, g.cabecera.inspector, g.cabecera.responsable || "", r.apto ? "APTO" : "NO APTO", r.ok, r.ko, r.na];
     });
     const csv = [cab, ...filas].map((fila) => fila.map(campoCSV).join(";")).join("\n");
     descargar("﻿" + csv, `resumen-inspecciones-${hoy()}.csv`, "text/csv");
@@ -346,7 +367,7 @@ export default function App() {
                   <div key={g.id} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                     <button onClick={() => { setActaVista(g); setVista("acta"); }} className="flex-1 text-left">
                       <p className="font-semibold text-slate-800 dark:text-slate-100">{g.cabecera.equipo || "Equipo sin nombre"}</p>
-                      <p className="text-sm text-slate-500 dark:text-slate-400">{fechaHora(g.id)} · {g.cabecera.inspector || "Sin inspector"}</p>
+                      <p className="text-sm text-slate-500 dark:text-slate-400">{g.numero ? `Nº ${numeroActa(g.numero)} · ` : ""}{fechaHora(g.id)} · {g.cabecera.inspector || "Sin inspector"}</p>
                     </button>
                     <span className={"rounded-md px-2 py-1 text-xs font-bold " + (r.apto ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300")}>{r.apto ? "APTO" : "NO APTO"}</span>
                     <button onClick={() => borrarGuardada(g.id)} className="px-2 text-slate-300 hover:text-red-500" title="Borrar">🗑️</button>
@@ -548,9 +569,13 @@ export default function App() {
         )}
 
         <div className="mb-5 space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <Campo label="Inspector *" valor={cabecera.inspector} onCambio={(v) => setCabecera({ ...cabecera, inspector: v })} placeholder="Nombre / código del operario" />
+          <Campo label="Inspector / Operario *" valor={cabecera.inspector} onCambio={(v) => setCabecera({ ...cabecera, inspector: v })} placeholder="Nombre / código del operario" />
           <Campo label="Equipo / Ubicación *" valor={cabecera.equipo} onCambio={(v) => setCabecera({ ...cabecera, equipo: v })} placeholder="Ej.: Línea 2 — Prensa hidráulica" />
-          <Campo label="Fecha" tipo="date" valor={cabecera.fecha} onCambio={(v) => setCabecera({ ...cabecera, fecha: v })} />
+          <div className="grid grid-cols-2 gap-3">
+            <Campo label="Fecha" tipo="date" valor={cabecera.fecha} onCambio={(v) => setCabecera({ ...cabecera, fecha: v })} />
+            <Campo label="Hora" tipo="time" valor={cabecera.hora} onCambio={(v) => setCabecera({ ...cabecera, hora: v })} />
+          </div>
+          <Campo label="Responsable / Supervisor" valor={cabecera.responsable} onCambio={(v) => setCabecera({ ...cabecera, responsable: v })} placeholder="(opcional) quien valida la inspección" />
         </div>
 
         <div className="space-y-3">
@@ -560,8 +585,22 @@ export default function App() {
         </div>
 
         <div className="mt-5 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <h3 className="mb-2 font-mono text-sm font-bold uppercase tracking-wider text-slate-400">Firma del operario</h3>
-          <Firma onCambio={setFirma} inicial={firmaInicial} />
+          <h3 className="mb-2 font-mono text-sm font-bold uppercase tracking-wider text-slate-400">Observaciones generales</h3>
+          <Campo label="" multilinea filas={3} valor={observaciones} onCambio={setObservaciones} placeholder="Notas, incidencias detectadas, acciones recomendadas…" />
+        </div>
+
+        <div className="mt-5 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <h3 className="mb-3 font-mono text-sm font-bold uppercase tracking-wider text-slate-400">Firmas</h3>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <p className="mb-1 text-xs font-semibold text-slate-500 dark:text-slate-400">Operario{cabecera.inspector ? ` · ${cabecera.inspector}` : ""}</p>
+              <Firma onCambio={setFirma} inicial={firmaInicial} />
+            </div>
+            <div>
+              <p className="mb-1 text-xs font-semibold text-slate-500 dark:text-slate-400">Responsable{cabecera.responsable ? ` · ${cabecera.responsable}` : " (opcional)"}</p>
+              <Firma onCambio={setFirmaResponsable} inicial={firmaResponsableInicial} />
+            </div>
+          </div>
         </div>
 
         {resumen.pend > 0 && <p className="mt-4 rounded-lg bg-amber-50 px-4 py-2 text-sm text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">Quedan {resumen.pend} punto(s) sin marcar.</p>}
@@ -602,12 +641,17 @@ export default function App() {
                 <h1 className="text-xl font-bold text-slate-900">Acta de inspección</h1>
                 <p className="text-sm text-slate-500">{actaVista.plantilla}</p>
               </div>
-              <span className={"rounded-lg px-3 py-1 text-sm font-bold " + (r.apto ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700")}>{r.apto ? "APTO" : "NO APTO"}</span>
+              <div className="text-right">
+                <span className={"rounded-lg px-3 py-1 text-sm font-bold " + (r.apto ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700")}>{r.apto ? "APTO" : "NO APTO"}</span>
+                {actaVista.numero && <p className="mt-1 font-mono text-xs text-slate-500">Nº {numeroActa(actaVista.numero)}</p>}
+              </div>
             </div>
             <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
               <DatoActa etiqueta="Equipo / Ubicación" valor={actaVista.cabecera.equipo} />
-              <DatoActa etiqueta="Inspector" valor={actaVista.cabecera.inspector} />
+              <DatoActa etiqueta="Inspector / Operario" valor={actaVista.cabecera.inspector} />
               <DatoActa etiqueta="Fecha" valor={actaVista.cabecera.fecha} />
+              <DatoActa etiqueta="Hora" valor={actaVista.cabecera.hora} />
+              <DatoActa etiqueta="Responsable" valor={actaVista.cabecera.responsable} />
               <DatoActa etiqueta="Resumen" valor={`${r.ok} OK · ${r.ko} No OK · ${r.na} N/A`} />
             </div>
             {actaVista.editadoEn && <p className="mt-3 text-xs italic text-slate-400">Editada el {fechaHora(actaVista.editadoEn)}</p>}
@@ -632,10 +676,29 @@ export default function App() {
                 })}
               </tbody>
             </table>
-            {actaVista.firma && (
-              <div className="mt-6">
-                <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Firma</p>
-                <img src={actaVista.firma} alt="firma" className="mt-1 h-20 border-b border-slate-300" />
+            {actaVista.observaciones && (
+              <div className="mt-5">
+                <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Observaciones</p>
+                <p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{actaVista.observaciones}</p>
+              </div>
+            )}
+
+            {(actaVista.firma || actaVista.firmaResponsable || (actaVista.cabecera.responsable || "").trim()) && (
+              <div className="mt-6 grid grid-cols-2 gap-6">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Firma del operario</p>
+                  {actaVista.firma
+                    ? <img src={actaVista.firma} alt="firma operario" className="mt-1 h-20" />
+                    : <div className="mt-1 h-20" />}
+                  <p className="border-t border-slate-300 pt-1 text-sm text-slate-700">{actaVista.cabecera.inspector || "—"}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Firma del responsable</p>
+                  {actaVista.firmaResponsable
+                    ? <img src={actaVista.firmaResponsable} alt="firma responsable" className="mt-1 h-20" />
+                    : <div className="mt-1 h-20" />}
+                  <p className="border-t border-slate-300 pt-1 text-sm text-slate-700">{actaVista.cabecera.responsable || "—"}</p>
+                </div>
               </div>
             )}
           </div>

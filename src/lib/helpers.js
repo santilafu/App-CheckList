@@ -38,6 +38,17 @@ export function hoy() {
   return new Date().toISOString().slice(0, 10);
 }
 
+// Hora actual en formato HH:MM, para inputs time.
+export function horaActual() {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+// Formatea el número de acta correlativo (entero) como "0001".
+export function numeroActa(n) {
+  return n ? String(n).padStart(4, "0") : "—";
+}
+
 // Timestamp actual (id de los registros). Aislado aquí para no llamar a una
 // función impura (Date.now) dentro del componente.
 export function ahora() {
