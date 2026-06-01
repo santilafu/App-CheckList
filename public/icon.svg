@@ -1,0 +1,20 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="512" height="512" rx="112" fill="#0f172a"/>
+  <!-- Portapapeles -->
+  <rect x="136" y="120" width="240" height="280" rx="28" fill="#1e293b" stroke="#f97316" stroke-width="10"/>
+  <!-- Pinza superior -->
+  <rect x="212" y="96" width="88" height="48" rx="16" fill="#f97316"/>
+  <!-- Líneas de checklist -->
+  <g stroke-linecap="round">
+    <circle cx="186" cy="206" r="14" fill="none" stroke="#f97316" stroke-width="10"/>
+    <path d="M178 206 l6 7 l12 -14" stroke="#f97316" stroke-width="9" fill="none" stroke-linejoin="round"/>
+    <rect x="218" y="196" width="118" height="18" rx="9" fill="#64748b"/>
+
+    <circle cx="186" cy="262" r="14" fill="none" stroke="#f97316" stroke-width="10"/>
+    <path d="M178 262 l6 7 l12 -14" stroke="#f97316" stroke-width="9" fill="none" stroke-linejoin="round"/>
+    <rect x="218" y="252" width="118" height="18" rx="9" fill="#64748b"/>
+
+    <circle cx="186" cy="318" r="14" fill="none" stroke="#475569" stroke-width="10"/>
+    <rect x="218" y="308" width="86" height="18" rx="9" fill="#475569"/>
+  </g>
+</svg>
