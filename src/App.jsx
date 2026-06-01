@@ -9,7 +9,10 @@ import {
 import { Marco, Campo, DatoActa, Pildora } from "./components/ui";
 import { Firma } from "./components/Firma";
 import { PuntoChecklist } from "./components/PuntoChecklist";
+import { Nube } from "./components/Nube";
 import { generarPDFActa, compartirPDFActa } from "./lib/pdf";
+import { supabase, hayNube } from "./lib/supabase";
+import { bajar, subir, fusionar, modInspeccion, modPlantilla } from "./lib/sync";
 
 /* =========================================================================
    APP DE CHECKLISTS / RONDAS DE INSPECCIÓN
@@ -63,6 +66,14 @@ export default function App() {
 
   const [borrador, setBorrador] = useState(() => almacen.leer("borrador", null));
 
+  // --- Nube (sincronización) ---
+  const [usuario, setUsuario] = useState(null);
+  const [sincronizando, setSincronizando] = useState(false);
+  const [estadoSync, setEstadoSync] = useState("");
+  // Lápidas de borrados para propagar entre dispositivos: { inspecciones:{id:mod}, plantillas:{id:mod} }
+  const [tumbas, setTumbas] = useState(() => almacen.leer("tumbas", { inspecciones: {}, plantillas: {} }));
+  useEffect(() => { almacen.guardar("tumbas", tumbas); }, [tumbas]);
+
   const [actaVista, setActaVista] = useState(null);
   const [editP, setEditP] = useState(null);     // plantilla en edición
   const [editandoId, setEditandoId] = useState(null); // id del acta que se edita (o null = nueva)
@@ -103,6 +114,76 @@ export default function App() {
   }, [vista, plantilla, cabecera, resultados, observaciones, firma, firmaResponsable, editandoId]);
 
   function limpiarBorrador() { almacen.guardar("borrador", null); setBorrador(null); }
+
+  // --- NUBE: sesión y sincronización ---
+
+  // Sincronización completa a dos vías (baja + fusiona + sube). Se usa al
+  // iniciar sesión y con el botón "Sincronizar ahora".
+  async function sincronizar() {
+    if (!usuario) return;
+    setSincronizando(true);
+    setEstadoSync("Sincronizando…");
+    try {
+      const nube = await bajar(usuario.id);
+      const fi = fusionar(guardadas, modInspeccion, nube.inspecciones, tumbas.inspecciones || {});
+      const fp = fusionar(plantillasUsuario, modPlantilla, nube.plantillas, tumbas.plantillas || {});
+      const nuevasGuardadas = [...fi.items].sort((a, b) => b.id - a.id);
+      const nuevasTumbas = { inspecciones: fi.tumbas, plantillas: fp.tumbas };
+      setGuardadas(nuevasGuardadas);
+      setPlantillasUsuario(fp.items);
+      setTumbas(nuevasTumbas);
+      await subir(usuario.id, nuevasGuardadas, fp.items, nuevasTumbas);
+      setEstadoSync(`Sincronizado · ${fechaHora(ahora())}`);
+    } catch (e) {
+      console.error(e);
+      setEstadoSync("Error al sincronizar: " + (e.message || "revisa la conexión"));
+    } finally {
+      setSincronizando(false);
+    }
+  }
+
+  async function entrarNube(email, clave) {
+    setSincronizando(true); setEstadoSync("");
+    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password: clave });
+    if (error) setEstadoSync(error.message);
+    setSincronizando(false);
+  }
+  async function registrarNube(email, clave) {
+    setSincronizando(true); setEstadoSync("");
+    const { data, error } = await supabase.auth.signUp({ email: email.trim(), password: clave });
+    if (error) setEstadoSync(error.message);
+    else if (!data.session) setEstadoSync("Cuenta creada. Si pide confirmación, revisa tu email y luego entra.");
+    setSincronizando(false);
+  }
+  async function salirNube() {
+    await supabase.auth.signOut();
+    setEstadoSync("");
+  }
+
+  // Sesión: recupera la actual y escucha cambios (login/logout).
+  useEffect(() => {
+    if (!hayNube) return;
+    supabase.auth.getSession().then(({ data }) => setUsuario(data.session?.user ?? null));
+    const { data } = supabase.auth.onAuthStateChange((_evento, sesion) => setUsuario(sesion?.user ?? null));
+    return () => data.subscription.unsubscribe();
+  }, []);
+
+  // Al iniciar sesión, sincroniza una vez (intencionado; no es un bucle de render).
+  useEffect(() => {
+    if (usuario) sincronizar(); // eslint-disable-line react-hooks/set-state-in-effect
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [usuario]);
+
+  // Subida automática (debounce) cuando cambian los datos estando con sesión.
+  // Solo empuja a la nube (no toca el estado local), así no hay bucles.
+  useEffect(() => {
+    if (!usuario || !hayNube) return;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+    const t = setTimeout(() => {
+      subir(usuario.id, guardadas, plantillasUsuario, tumbas).catch((e) => console.error("subir", e));
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [usuario, guardadas, plantillasUsuario, tumbas]);
 
   function empezarConPlantilla(plt) {
     setPlantilla(plt);
@@ -200,7 +281,10 @@ export default function App() {
   }
 
   function borrarGuardada(id) {
-    if (window.confirm("¿Borrar esta inspección? No se puede deshacer.")) setGuardadas(guardadas.filter((g) => g.id !== id));
+    if (window.confirm("¿Borrar esta inspección? No se puede deshacer.")) {
+      setGuardadas(guardadas.filter((g) => g.id !== id));
+      setTumbas((t) => ({ ...t, inspecciones: { ...t.inspecciones, [String(id)]: ahora() } }));
+    }
   }
 
   // --- Copia de seguridad JSON ---
@@ -296,14 +380,17 @@ export default function App() {
       window.alert("La plantilla necesita un nombre y al menos un punto.");
       return;
     }
-    const limpia = { id: editP.id, nombre: editP.nombre.trim(), items };
+    const limpia = { id: editP.id, nombre: editP.nombre.trim(), items, actualizadoEn: ahora() };
     if (editP.esNueva) setPlantillasUsuario([...plantillasUsuario, limpia]);
     else setPlantillasUsuario(plantillasUsuario.map((p) => (p.id === limpia.id ? limpia : p)));
     setEditP(null);
     setVista("plantillas");
   }
   function borrarPlantillaUsuario(id) {
-    if (window.confirm("¿Borrar esta plantilla? Las actas ya creadas no se ven afectadas.")) setPlantillasUsuario(plantillasUsuario.filter((p) => p.id !== id));
+    if (window.confirm("¿Borrar esta plantilla? Las actas ya creadas no se ven afectadas.")) {
+      setPlantillasUsuario(plantillasUsuario.filter((p) => p.id !== id));
+      setTumbas((t) => ({ ...t, plantillas: { ...t.plantillas, [id]: ahora() } }));
+    }
   }
 
   // --- Listado filtrado y ordenado ---
@@ -558,6 +645,9 @@ export default function App() {
             ))}
           </div>
         </div>
+
+        <Nube hayNube={hayNube} usuario={usuario} estado={estadoSync} sincronizando={sincronizando}
+          onLogin={entrarNube} onRegistro={registrarNube} onLogout={salirNube} onSync={sincronizar} />
       </Marco>
     );
   }

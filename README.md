@@ -77,6 +77,39 @@ Abre un acta y pulsa **📄 Descargar PDF**: genera el PDF directamente (texto
 vectorial, tabla, evidencias fotográficas y firmas). Como alternativa, el botón
 **🖨️** abre el diálogo de impresión del navegador (elige *"Guardar como PDF"*).
 
+## Sincronización en la nube (opcional)
+
+La app es **local-first**: funciona 100% offline guardando en el navegador. De
+forma **opcional** puedes activar la sincronización en la nube con
+[Supabase](https://supabase.com) para tener tus actas y plantillas en tu cuenta
+y verlas en varios dispositivos (móvil + PC).
+
+Si no la configuras, la app sigue funcionando en modo local, como siempre.
+
+### Cómo activarla
+
+1. Crea una cuenta gratis en [supabase.com](https://supabase.com) y un **proyecto nuevo**.
+2. En el proyecto → **SQL Editor** → pega y ejecuta el contenido de
+   [`supabase/schema.sql`](supabase/schema.sql) (crea las tablas con seguridad por filas).
+3. (Recomendado para empezar) En **Authentication → Providers → Email**, desactiva
+   *"Confirm email"* para poder entrar sin confirmar el correo.
+4. En **Project Settings → API** copia la **Project URL** y la **anon public key**.
+5. Crea un archivo `.env.local` (copia de `.env.example`) con:
+   ```
+   VITE_SUPABASE_URL=https://TU-PROYECTO.supabase.co
+   VITE_SUPABASE_ANON_KEY=TU_ANON_KEY
+   ```
+6. En **Vercel** → tu proyecto → **Settings → Environment Variables**, añade esas
+   dos variables y vuelve a desplegar.
+
+Luego, en la app: **Ajustes (⚙) → Nube** → crea una cuenta o entra. Al iniciar
+sesión, tus datos se sincronizan; los cambios se suben solos y puedes forzar con
+**🔄 Sincronizar ahora**.
+
+> La sincronización usa *last-write-wins* por registro con tombstones (borrar en
+> un dispositivo borra en el otro). Las fotos van incrustadas en el acta (base64);
+> si subes muchas, vigila el límite de almacenamiento del plan gratuito.
+
 ## Despliegue en Vercel
 
 El proyecto incluye `vercel.json` (rewrite SPA + cabecera del service worker).
