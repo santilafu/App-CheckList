@@ -22,6 +22,8 @@ import { PuntoChecklist } from "./components/PuntoChecklist";
    - Exportación a CSV (resumen global y detalle de un acta).
    - Filtros y orden del listado (APTO/NO APTO, plantilla, fecha, búsqueda).
    - Autoguardado del borrador, copia de seguridad JSON, firma y fotos.
+   - Editar un acta ya guardada (reusa la vista de rellenar; ver `editandoId`).
+   - Modo claro / oscuro con toggle, persistido en `tema`.
 
    PDF = imprimir desde el navegador. Persistencia = localStorage.
    ========================================================================= */
@@ -40,10 +42,25 @@ export default function App() {
   const [empresa, setEmpresa] = useState(() => almacen.leer("empresa", ""));
   useEffect(() => { almacen.guardar("empresa", empresa); }, [empresa]);
 
+  // Tema claro/oscuro. Por defecto seguimos la preferencia del sistema; una vez
+  // el usuario elige, se respeta su elección (persistida).
+  const [tema, setTema] = useState(() => {
+    const guardado = almacen.leer("tema", null);
+    if (guardado) return guardado;
+    const sistemaOscuro = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    return sistemaOscuro ? "dark" : "light";
+  });
+  useEffect(() => {
+    almacen.guardar("tema", tema);
+    document.documentElement.classList.toggle("dark", tema === "dark");
+  }, [tema]);
+  const alternarTema = () => setTema(tema === "dark" ? "light" : "dark");
+
   const [borrador, setBorrador] = useState(() => almacen.leer("borrador", null));
 
   const [actaVista, setActaVista] = useState(null);
-  const [editP, setEditP] = useState(null); // plantilla en edición
+  const [editP, setEditP] = useState(null);     // plantilla en edición
+  const [editandoId, setEditandoId] = useState(null); // id del acta que se edita (o null = nueva)
 
   // Filtros del listado
   const [busqueda, setBusqueda] = useState("");
@@ -60,16 +77,17 @@ export default function App() {
 
   const inputImportar = useRef(null);
 
-  // AUTOGUARDADO del borrador (guardamos la plantilla entera por robustez).
+  // AUTOGUARDADO del borrador (guardamos la plantilla entera y si se está
+  // editando un acta, por robustez al salir y volver).
   useEffect(() => {
     if (vista !== "rellenar") return;
-    const b = { plantilla, cabecera, resultados, firma };
+    const b = { plantilla, cabecera, resultados, firma, editandoId };
     almacen.guardar("borrador", b);
     // Autoguardado intencionado: reflejamos el borrador en estado para que la
     // tarjeta "Inspección en curso" del inicio quede al día al volver.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setBorrador(b);
-  }, [vista, plantilla, cabecera, resultados, firma]);
+  }, [vista, plantilla, cabecera, resultados, firma, editandoId]);
 
   function limpiarBorrador() { almacen.guardar("borrador", null); setBorrador(null); }
 
@@ -78,6 +96,7 @@ export default function App() {
     setCabecera({ inspector: "", equipo: "", fecha: hoy() });
     setResultados(resultadosVacios(plt));
     setFirma(null); setFirmaInicial(null);
+    setEditandoId(null);
     setVista("rellenar");
   }
   function continuarBorrador() {
@@ -85,6 +104,7 @@ export default function App() {
     setCabecera(borrador.cabecera);
     setResultados(borrador.resultados);
     setFirma(borrador.firma); setFirmaInicial(borrador.firma);
+    setEditandoId(borrador.editandoId ?? null);
     setVista("rellenar");
   }
   function descartarBorrador() {
@@ -96,6 +116,21 @@ export default function App() {
     setCabecera({ inspector: registro.cabecera.inspector, equipo: registro.cabecera.equipo, fecha: hoy() });
     setResultados(resultadosVacios(plt));
     setFirma(null); setFirmaInicial(null);
+    setEditandoId(null);
+    setVista("rellenar");
+  }
+  // Editar un acta YA guardada: reconstruimos la plantilla a partir del propio
+  // registro (sus items snapshot) y cargamos sus resultados/firma. Al finalizar
+  // se ACTUALIZA ese registro en vez de crear uno nuevo.
+  function editarActa(registro) {
+    const plt = { id: "acta-" + registro.id, nombre: registro.plantilla, items: registro.items };
+    const res = {};
+    registro.items.forEach((it) => { res[it.id] = { ...resultadoDe(registro.resultados, it.id) }; });
+    setPlantilla(plt);
+    setCabecera({ ...registro.cabecera });
+    setResultados(res);
+    setFirma(registro.firma); setFirmaInicial(registro.firma);
+    setEditandoId(registro.id);
     setVista("rellenar");
   }
 
@@ -114,11 +149,25 @@ export default function App() {
     }
     const koSinComentario = plantilla.items.filter((it) => resultados[it.id].estado === "ko" && !resultados[it.id].comentario.trim()).length;
     if (koSinComentario > 0) {
-      if (!window.confirm(`Hay ${koSinComentario} punto(s) "No OK" sin comentario.\n¿Generar el acta igualmente?`)) return;
+      const pregunta = editandoId
+        ? `Hay ${koSinComentario} punto(s) "No OK" sin comentario.\n¿Guardar los cambios igualmente?`
+        : `Hay ${koSinComentario} punto(s) "No OK" sin comentario.\n¿Generar el acta igualmente?`;
+      if (!window.confirm(pregunta)) return;
     }
-    const registro = { id: ahora(), empresa, plantilla: plantilla.nombre, cabecera, resultados, firma, items: plantilla.items };
-    setGuardadas([registro, ...guardadas]);
-    setActaVista(registro);
+    const ts = ahora();
+    if (editandoId) {
+      // Actualizamos el acta existente conservando su id (fecha de creación),
+      // empresa original, etc., y dejamos constancia de la edición.
+      const original = guardadas.find((g) => g.id === editandoId);
+      const actualizado = { ...original, plantilla: plantilla.nombre, cabecera, resultados, firma, items: plantilla.items, editadoEn: ts };
+      setGuardadas(guardadas.map((g) => (g.id === editandoId ? actualizado : g)));
+      setActaVista(actualizado);
+    } else {
+      const registro = { id: ts, empresa, plantilla: plantilla.nombre, cabecera, resultados, firma, items: plantilla.items };
+      setGuardadas([registro, ...guardadas]);
+      setActaVista(registro);
+    }
+    setEditandoId(null);
     limpiarBorrador();
     setVista("acta");
   }
@@ -210,18 +259,21 @@ export default function App() {
     })
     .sort((a, b) => (orden === "desc" ? b.id - a.id : a.id - b.id));
 
+  // Props comunes del tema para pasar a Marco en todas las vistas.
+  const propsTema = { tema, onToggleTema: alternarTema };
+
 
   /* ======================= INICIO ======================= */
   if (vista === "inicio") {
     return (
-      <Marco onAjustes={() => setVista("ajustes")}>
+      <Marco {...propsTema} onAjustes={() => setVista("ajustes")}>
         {borrador && (
-          <div className="mb-4 rounded-xl border-2 border-orange-300 bg-orange-50 p-4">
-            <p className="font-bold text-orange-800">Inspección en curso</p>
-            <p className="mb-3 text-sm text-orange-700">{borrador.cabecera.equipo || "Equipo sin nombre"} — tienes una sin terminar.</p>
+          <div className="mb-4 rounded-xl border-2 border-orange-300 bg-orange-50 p-4 dark:border-orange-900/60 dark:bg-orange-950/40">
+            <p className="font-bold text-orange-800 dark:text-orange-200">{borrador.editandoId ? "Editando un acta" : "Inspección en curso"}</p>
+            <p className="mb-3 text-sm text-orange-700 dark:text-orange-300">{borrador.cabecera.equipo || "Equipo sin nombre"} — tienes una sin terminar.</p>
             <div className="flex gap-2">
               <button onClick={continuarBorrador} className="flex-1 rounded-lg bg-orange-500 py-2 text-sm font-bold text-white hover:bg-orange-600">Continuar</button>
-              <button onClick={descartarBorrador} className="rounded-lg border border-orange-300 px-3 py-2 text-sm font-semibold text-orange-700 hover:bg-orange-100">Descartar</button>
+              <button onClick={descartarBorrador} className="rounded-lg border border-orange-300 px-3 py-2 text-sm font-semibold text-orange-700 hover:bg-orange-100 dark:border-orange-900/60 dark:text-orange-300 dark:hover:bg-orange-950/60">Descartar</button>
             </div>
           </div>
         )}
@@ -229,8 +281,8 @@ export default function App() {
         <button onClick={() => setVista("elegir")} className="w-full rounded-xl bg-orange-500 py-4 text-lg font-bold text-white shadow-lg shadow-orange-500/30 transition hover:bg-orange-600">+ Nueva inspección</button>
 
         <div className="mt-3 grid grid-cols-2 gap-2">
-          <button onClick={() => setVista("stats")} className="rounded-xl border border-slate-200 bg-white py-3 text-sm font-bold text-slate-700 shadow-sm hover:border-orange-300">📊 Estadísticas</button>
-          <button onClick={() => setVista("plantillas")} className="rounded-xl border border-slate-200 bg-white py-3 text-sm font-bold text-slate-700 shadow-sm hover:border-orange-300">📋 Plantillas</button>
+          <button onClick={() => setVista("stats")} className="rounded-xl border border-slate-200 bg-white py-3 text-sm font-bold text-slate-700 shadow-sm hover:border-orange-300 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200">📊 Estadísticas</button>
+          <button onClick={() => setVista("plantillas")} className="rounded-xl border border-slate-200 bg-white py-3 text-sm font-bold text-slate-700 shadow-sm hover:border-orange-300 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200">📋 Plantillas</button>
         </div>
 
         <div className="mt-6 flex items-center justify-between">
@@ -249,17 +301,17 @@ export default function App() {
         {guardadas.length > 0 && (
           <div className="mt-3 space-y-2">
             <input type="text" value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="Buscar por equipo o inspector…"
-              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-orange-400" />
+              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-orange-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100" />
             <div className="flex flex-wrap gap-2">
               {[["todos", "Todas"], ["apto", "Aptas"], ["noapto", "No aptas"]].map(([v, etq]) => (
                 <button key={v} onClick={() => setFVeredicto(v)}
-                  className={"rounded-full px-3 py-1 text-xs font-bold " + (fVeredicto === v ? "bg-slate-800 text-white" : "bg-slate-200 text-slate-600")}>{etq}</button>
+                  className={"rounded-full px-3 py-1 text-xs font-bold " + (fVeredicto === v ? "bg-slate-800 text-white dark:bg-slate-100 dark:text-slate-900" : "bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300")}>{etq}</button>
               ))}
-              <button onClick={() => setOrden(orden === "desc" ? "asc" : "desc")} className="rounded-full bg-slate-200 px-3 py-1 text-xs font-bold text-slate-600">
+              <button onClick={() => setOrden(orden === "desc" ? "asc" : "desc")} className="rounded-full bg-slate-200 px-3 py-1 text-xs font-bold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
                 {orden === "desc" ? "↓ Recientes" : "↑ Antiguas"}
               </button>
             </div>
-            <select value={fPlantilla} onChange={(e) => setFPlantilla(e.target.value)} className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-orange-400">
+            <select value={fPlantilla} onChange={(e) => setFPlantilla(e.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-orange-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100">
               <option value="">Todas las plantillas</option>
               {[...new Set(guardadas.map((g) => g.plantilla))].map((nom) => (<option key={nom} value={nom}>{nom}</option>))}
             </select>
@@ -268,20 +320,20 @@ export default function App() {
 
         <div className="mt-3">
           {guardadas.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-slate-300 p-6 text-center text-slate-400">Aún no hay inspecciones. Pulsa “Nueva inspección” para empezar.</p>
+            <p className="rounded-xl border border-dashed border-slate-300 p-6 text-center text-slate-400 dark:border-slate-700 dark:text-slate-500">Aún no hay inspecciones. Pulsa “Nueva inspección” para empezar.</p>
           ) : listaFiltrada.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-slate-300 p-6 text-center text-slate-400">Sin resultados con esos filtros.</p>
+            <p className="rounded-xl border border-dashed border-slate-300 p-6 text-center text-slate-400 dark:border-slate-700 dark:text-slate-500">Sin resultados con esos filtros.</p>
           ) : (
             <div className="space-y-2">
               {listaFiltrada.map((g) => {
                 const r = calcularResumen(g.items, g.resultados);
                 return (
-                  <div key={g.id} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <div key={g.id} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                     <button onClick={() => { setActaVista(g); setVista("acta"); }} className="flex-1 text-left">
-                      <p className="font-semibold text-slate-800">{g.cabecera.equipo || "Equipo sin nombre"}</p>
-                      <p className="text-sm text-slate-500">{fechaHora(g.id)} · {g.cabecera.inspector || "Sin inspector"}</p>
+                      <p className="font-semibold text-slate-800 dark:text-slate-100">{g.cabecera.equipo || "Equipo sin nombre"}</p>
+                      <p className="text-sm text-slate-500 dark:text-slate-400">{fechaHora(g.id)} · {g.cabecera.inspector || "Sin inspector"}</p>
                     </button>
-                    <span className={"rounded-md px-2 py-1 text-xs font-bold " + (r.apto ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700")}>{r.apto ? "APTO" : "NO APTO"}</span>
+                    <span className={"rounded-md px-2 py-1 text-xs font-bold " + (r.apto ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300")}>{r.apto ? "APTO" : "NO APTO"}</span>
                     <button onClick={() => borrarGuardada(g.id)} className="px-2 text-slate-300 hover:text-red-500" title="Borrar">🗑️</button>
                   </div>
                 );
@@ -310,29 +362,29 @@ export default function App() {
     const maxKo = ranking.length ? ranking[0][1] : 1;
 
     return (
-      <Marco onVolver={() => setVista("inicio")} titulo="Estadísticas">
+      <Marco {...propsTema} onVolver={() => setVista("inicio")} titulo="Estadísticas">
         {total === 0 ? (
-          <p className="rounded-xl border border-dashed border-slate-300 p-6 text-center text-slate-400">Sin datos todavía. Crea inspecciones para ver estadísticas.</p>
+          <p className="rounded-xl border border-dashed border-slate-300 p-6 text-center text-slate-400 dark:border-slate-700 dark:text-slate-500">Sin datos todavía. Crea inspecciones para ver estadísticas.</p>
         ) : (
           <>
             <div className="grid grid-cols-3 gap-2 text-center">
-              <Pildora etiqueta="Inspecciones" valor={total} color="text-slate-800" />
+              <Pildora etiqueta="Inspecciones" valor={total} color="text-slate-800 dark:text-slate-100" />
               <Pildora etiqueta="Aptas" valor={aptas} color="text-emerald-600" />
               <Pildora etiqueta="% Apto" valor={pctApto + "%"} color="text-orange-600" />
             </div>
 
             <h3 className="mb-2 mt-6 font-mono text-sm font-bold uppercase tracking-wider text-slate-400">Puntos que más fallan</h3>
             {ranking.length === 0 ? (
-              <p className="rounded-xl border border-dashed border-slate-300 p-4 text-center text-sm text-slate-400">¡Ningún “No OK” registrado! 🎉</p>
+              <p className="rounded-xl border border-dashed border-slate-300 p-4 text-center text-sm text-slate-400 dark:border-slate-700 dark:text-slate-500">¡Ningún “No OK” registrado! 🎉</p>
             ) : (
               <div className="space-y-2">
                 {ranking.map(([texto, n]) => (
-                  <div key={texto} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                  <div key={texto} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                     <div className="mb-1 flex justify-between text-sm">
-                      <span className="text-slate-700">{texto}</span>
+                      <span className="text-slate-700 dark:text-slate-200">{texto}</span>
                       <span className="font-bold text-red-600">{n}</span>
                     </div>
-                    <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+                    <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
                       <div className="h-full bg-red-500" style={{ width: Math.round((n / maxKo) * 100) + "%" }} />
                     </div>
                   </div>
@@ -348,13 +400,13 @@ export default function App() {
   /* ======================= PLANTILLAS ======================= */
   if (vista === "plantillas") {
     return (
-      <Marco onVolver={() => setVista("inicio")} titulo="Plantillas">
+      <Marco {...propsTema} onVolver={() => setVista("inicio")} titulo="Plantillas">
         <button onClick={nuevaPlantilla} className="mb-4 w-full rounded-xl bg-orange-500 py-3 font-bold text-white hover:bg-orange-600">+ Nueva plantilla</button>
         <div className="space-y-2">
           {TODAS_PLANTILLAS.map((plt) => (
-            <div key={plt.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <p className="font-semibold text-slate-800">{plt.nombre}</p>
-              <p className="text-sm text-slate-500">{plt.items.length} puntos {plt.deFabrica && "· de fábrica"}</p>
+            <div key={plt.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <p className="font-semibold text-slate-800 dark:text-slate-100">{plt.nombre}</p>
+              <p className="text-sm text-slate-500 dark:text-slate-400">{plt.items.length} puntos {plt.deFabrica && "· de fábrica"}</p>
               <div className="mt-2 flex gap-3 text-xs font-semibold">
                 {plt.deFabrica ? (
                   <button onClick={() => duplicarPlantilla(plt)} className="text-orange-500 hover:text-orange-600">Duplicar para editar</button>
@@ -389,24 +441,24 @@ export default function App() {
       setEditP({ ...editP, items });
     }
     return (
-      <Marco onVolver={() => { setEditP(null); setVista("plantillas"); }} titulo={editP.esNueva ? "Nueva plantilla" : "Editar plantilla"}>
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <Marco {...propsTema} onVolver={() => { setEditP(null); setVista("plantillas"); }} titulo={editP.esNueva ? "Nueva plantilla" : "Editar plantilla"}>
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <Campo label="Nombre de la plantilla" valor={editP.nombre} onCambio={(v) => setEditP({ ...editP, nombre: v })} placeholder="Ej.: Revisión semanal compresor" />
         </div>
         <h3 className="mb-2 mt-5 font-mono text-sm font-bold uppercase tracking-wider text-slate-400">Puntos</h3>
         <div className="space-y-2">
           {editP.items.map((it, i) => (
-            <div key={it.id} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white p-2 shadow-sm">
+            <div key={it.id} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white p-2 shadow-sm dark:border-slate-800 dark:bg-slate-900">
               <span className="font-mono text-xs text-slate-400">{i + 1}</span>
               <input type="text" value={it.texto} onChange={(e) => setItem(i, e.target.value)} placeholder="Texto del punto…"
-                className="flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm outline-none focus:border-orange-400" />
-              <button onClick={() => mover(i, -1)} className="px-1 text-slate-400 hover:text-slate-700">▲</button>
-              <button onClick={() => mover(i, 1)} className="px-1 text-slate-400 hover:text-slate-700">▼</button>
+                className="flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-800 outline-none focus:border-orange-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100" />
+              <button onClick={() => mover(i, -1)} className="px-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200">▲</button>
+              <button onClick={() => mover(i, 1)} className="px-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200">▼</button>
               <button onClick={() => quitarItem(i)} className="px-1 text-slate-300 hover:text-red-500">✕</button>
             </div>
           ))}
         </div>
-        <button onClick={añadirItem} className="mt-2 w-full rounded-lg border border-dashed border-slate-300 py-2 text-sm font-semibold text-slate-500 hover:border-orange-300 hover:text-orange-500">+ Añadir punto</button>
+        <button onClick={añadirItem} className="mt-2 w-full rounded-lg border border-dashed border-slate-300 py-2 text-sm font-semibold text-slate-500 hover:border-orange-300 hover:text-orange-500 dark:border-slate-700 dark:text-slate-400">+ Añadir punto</button>
         <button onClick={guardarPlantilla} className="mt-4 w-full rounded-xl bg-orange-500 py-3 font-bold text-white hover:bg-orange-600">Guardar plantilla</button>
       </Marco>
     );
@@ -415,10 +467,22 @@ export default function App() {
   /* ======================= AJUSTES ======================= */
   if (vista === "ajustes") {
     return (
-      <Marco onVolver={() => setVista("inicio")} titulo="Ajustes">
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <Marco {...propsTema} onVolver={() => setVista("inicio")} titulo="Ajustes">
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <Campo label="Nombre de la empresa" valor={empresa} onCambio={setEmpresa} placeholder="Aparecerá como cabecera del acta" />
           <p className="mt-2 text-xs text-slate-400">Se mostrará en la parte superior de las actas que generes.</p>
+        </div>
+
+        <div className="mt-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <span className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-400">Tema</span>
+          <div className="flex gap-2">
+            {[["light", "☀ Claro"], ["dark", "🌙 Oscuro"]].map(([v, etq]) => (
+              <button key={v} onClick={() => setTema(v)}
+                className={"flex-1 rounded-lg py-2 text-sm font-bold transition " + (tema === v ? "bg-orange-500 text-white shadow" : "bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700")}>
+                {etq}
+              </button>
+            ))}
+          </div>
         </div>
       </Marco>
     );
@@ -427,14 +491,14 @@ export default function App() {
   /* ======================= ELEGIR PLANTILLA ======================= */
   if (vista === "elegir") {
     return (
-      <Marco onVolver={() => setVista("inicio")} titulo="Elegir plantilla">
-        <p className="mb-4 text-sm text-slate-500">¿Qué checklist quieres rellenar?</p>
+      <Marco {...propsTema} onVolver={() => setVista("inicio")} titulo="Elegir plantilla">
+        <p className="mb-4 text-sm text-slate-500 dark:text-slate-400">¿Qué checklist quieres rellenar?</p>
         <div className="space-y-2">
           {TODAS_PLANTILLAS.map((plt) => (
-            <button key={plt.id} onClick={() => empezarConPlantilla(plt)} className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white p-4 text-left shadow-sm hover:border-orange-300">
+            <button key={plt.id} onClick={() => empezarConPlantilla(plt)} className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white p-4 text-left shadow-sm hover:border-orange-300 dark:border-slate-800 dark:bg-slate-900">
               <div>
-                <p className="font-semibold text-slate-800">{plt.nombre}</p>
-                <p className="text-sm text-slate-500">{plt.items.length} puntos {plt.deFabrica && "· de fábrica"}</p>
+                <p className="font-semibold text-slate-800 dark:text-slate-100">{plt.nombre}</p>
+                <p className="text-sm text-slate-500 dark:text-slate-400">{plt.items.length} puntos {plt.deFabrica && "· de fábrica"}</p>
               </div>
               <span className="font-mono text-xs text-orange-500">USAR ›</span>
             </button>
@@ -449,13 +513,13 @@ export default function App() {
     const hechos = resumen.total - resumen.pend;
     const pct = Math.round((hechos / resumen.total) * 100);
     return (
-      <Marco onVolver={() => setVista("inicio")} titulo="Rellenar checklist">
+      <Marco {...propsTema} onVolver={() => setVista("inicio")} titulo={editandoId ? "Editar acta" : "Rellenar checklist"}>
         <p className="mb-2 rounded-lg bg-slate-800 px-4 py-2 font-mono text-xs text-orange-300">{plantilla.nombre}</p>
         <p className="mb-3 text-center text-xs text-slate-400">Se autoguarda · puedes salir y continuar luego</p>
 
         <div className="mb-3">
           <div className="mb-1 flex justify-between text-xs font-semibold text-slate-500"><span>Progreso</span><span>{hechos}/{resumen.total} · {pct}%</span></div>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200"><div className="h-full bg-orange-500 transition-all" style={{ width: pct + "%" }} /></div>
+          <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"><div className="h-full bg-orange-500 transition-all" style={{ width: pct + "%" }} /></div>
         </div>
 
         <div className="mb-4 grid grid-cols-4 gap-2 text-center">
@@ -465,10 +529,10 @@ export default function App() {
           <Pildora etiqueta="Pend." valor={resumen.pend} color="text-amber-600" />
         </div>
         {resumen.pend > 0 && (
-          <button onClick={marcarRestantesOK} className="mb-4 w-full rounded-lg border border-emerald-300 bg-emerald-50 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100">✓ Marcar los {resumen.pend} restantes como OK</button>
+          <button onClick={marcarRestantesOK} className="mb-4 w-full rounded-lg border border-emerald-300 bg-emerald-50 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">✓ Marcar los {resumen.pend} restantes como OK</button>
         )}
 
-        <div className="mb-5 space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-5 space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <Campo label="Inspector *" valor={cabecera.inspector} onCambio={(v) => setCabecera({ ...cabecera, inspector: v })} placeholder="Nombre / código del operario" />
           <Campo label="Equipo / Ubicación *" valor={cabecera.equipo} onCambio={(v) => setCabecera({ ...cabecera, equipo: v })} placeholder="Ej.: Línea 2 — Prensa hidráulica" />
           <Campo label="Fecha" tipo="date" valor={cabecera.fecha} onCambio={(v) => setCabecera({ ...cabecera, fecha: v })} />
@@ -480,18 +544,20 @@ export default function App() {
           ))}
         </div>
 
-        <div className="mt-5 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mt-5 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <h3 className="mb-2 font-mono text-sm font-bold uppercase tracking-wider text-slate-400">Firma del operario</h3>
           <Firma onCambio={setFirma} inicial={firmaInicial} />
         </div>
 
-        {resumen.pend > 0 && <p className="mt-4 rounded-lg bg-amber-50 px-4 py-2 text-sm text-amber-700">Quedan {resumen.pend} punto(s) sin marcar.</p>}
-        <button onClick={finalizar} className="mt-4 w-full rounded-xl bg-orange-500 py-4 text-lg font-bold text-white shadow-lg shadow-orange-500/30 transition hover:bg-orange-600">Finalizar y generar acta</button>
+        {resumen.pend > 0 && <p className="mt-4 rounded-lg bg-amber-50 px-4 py-2 text-sm text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">Quedan {resumen.pend} punto(s) sin marcar.</p>}
+        <button onClick={finalizar} className="mt-4 w-full rounded-xl bg-orange-500 py-4 text-lg font-bold text-white shadow-lg shadow-orange-500/30 transition hover:bg-orange-600">{editandoId ? "Guardar cambios" : "Finalizar y generar acta"}</button>
       </Marco>
     );
   }
 
-  /* ======================= ACTA ======================= */
+  /* ======================= ACTA =======================
+     El documento (#acta) se mantiene SIEMPRE en claro: es una hoja pensada
+     para imprimir; con tema oscuro el texto saldría invisible en papel. */
   if (vista === "acta" && actaVista) {
     const r = calcularResumen(actaVista.items, actaVista.resultados);
     const nombreEmpresa = actaVista.empresa || empresa;
@@ -505,11 +571,12 @@ export default function App() {
             .no-print { display: none !important; }
           }
         `}</style>
-        <Marco onVolver={() => setVista("inicio")} titulo="Acta de inspección">
+        <Marco {...propsTema} onVolver={() => setVista("inicio")} titulo="Acta de inspección">
           <div className="no-print mb-4 flex flex-wrap gap-2">
             <button onClick={() => window.print()} className="flex-1 rounded-xl bg-slate-800 py-3 font-bold text-white hover:bg-slate-900">🖨️ Imprimir / PDF</button>
-            <button onClick={() => repetir(actaVista)} className="rounded-xl border border-slate-300 px-4 py-3 font-bold text-slate-700 hover:bg-slate-100">🔁 Repetir</button>
-            <button onClick={() => exportarCSVActa(actaVista)} className="rounded-xl border border-slate-300 px-4 py-3 font-bold text-slate-700 hover:bg-slate-100">CSV</button>
+            <button onClick={() => editarActa(actaVista)} className="rounded-xl border border-slate-300 px-4 py-3 font-bold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">✏️ Editar</button>
+            <button onClick={() => repetir(actaVista)} className="rounded-xl border border-slate-300 px-4 py-3 font-bold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">🔁 Repetir</button>
+            <button onClick={() => exportarCSVActa(actaVista)} className="rounded-xl border border-slate-300 px-4 py-3 font-bold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">CSV</button>
           </div>
 
           <div id="acta" className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -527,9 +594,10 @@ export default function App() {
               <DatoActa etiqueta="Fecha" valor={actaVista.cabecera.fecha} />
               <DatoActa etiqueta="Resumen" valor={`${r.ok} OK · ${r.ko} No OK · ${r.na} N/A`} />
             </div>
+            {actaVista.editadoEn && <p className="mt-3 text-xs italic text-slate-400">Editada el {fechaHora(actaVista.editadoEn)}</p>}
             <table className="mt-5 w-full border-collapse text-sm">
               <thead>
-                <tr className="border-b-2 border-slate-300 text-left"><th className="py-2">#</th><th className="py-2">Punto de inspección</th><th className="py-2 text-center">Estado</th></tr>
+                <tr className="border-b-2 border-slate-300 text-left text-slate-600"><th className="py-2">#</th><th className="py-2">Punto de inspección</th><th className="py-2 text-center">Estado</th></tr>
               </thead>
               <tbody>
                 {actaVista.items.map((item, i) => {
@@ -538,11 +606,11 @@ export default function App() {
                   return (
                     <tr key={item.id} className="border-b border-slate-100 align-top">
                       <td className="py-2 font-mono text-slate-400">{i + 1}</td>
-                      <td className="py-2">{item.texto}
+                      <td className="py-2 text-slate-800">{item.texto}
                         {res.comentario && <span className="block text-xs italic text-slate-500">↳ {res.comentario}</span>}
                         {res.foto && <img src={res.foto} alt="evidencia" className="mt-1 h-16 rounded border border-slate-200" />}
                       </td>
-                      <td className="py-2 text-center font-bold">{est ? est.etiqueta : "—"}</td>
+                      <td className="py-2 text-center font-bold text-slate-800">{est ? est.etiqueta : "—"}</td>
                     </tr>
                   );
                 })}
