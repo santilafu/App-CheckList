@@ -53,3 +53,10 @@ export const ESTADOS = [
   { valor: "ko", etiqueta: "No OK", clase: "bg-red-500 text-white" },
   { valor: "na", etiqueta: "N/A", clase: "bg-slate-400 text-white" },
 ];
+
+// Tipos de campo que puede tener un punto del checklist. Sin tipo = "estado".
+export const TIPOS_CAMPO = [
+  { valor: "estado", etiqueta: "Estado (OK / No OK / N/A)" },
+  { valor: "numero", etiqueta: "Medida numérica (con rango)" },
+  { valor: "texto", etiqueta: "Texto / lectura libre" },
+];

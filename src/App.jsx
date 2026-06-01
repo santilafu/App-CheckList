@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect } from "react";
 
-import { PLANTILLAS_BASE, ESTADOS } from "./data/plantillas";
+import { PLANTILLAS_BASE, TIPOS_CAMPO } from "./data/plantillas";
 import { almacen } from "./lib/almacen";
 import {
-  calcularResumen, resultadosVacios, resultadoDe,
+  calcularResumen, resultadosVacios, resultadoDe, veredictoPunto, textoResultado, tipoDe,
   hoy, horaActual, numeroActa, ahora, uid, fechaHora, descargar, campoCSV,
 } from "./lib/helpers";
 import { Marco, Campo, DatoActa, Pildora } from "./components/ui";
@@ -156,9 +156,12 @@ export default function App() {
 
   const resumen = vista === "rellenar" ? calcularResumen(plantilla.items, resultados) : null;
 
+  // Solo aplica a puntos de tipo "estado" (las medidas/textos no se autocompletan).
   function marcarRestantesOK() {
     const copia = { ...resultados };
-    plantilla.items.forEach((it) => { if (!copia[it.id].estado) copia[it.id] = { ...copia[it.id], estado: "ok" }; });
+    plantilla.items.forEach((it) => {
+      if (tipoDe(it) === "estado" && !copia[it.id].estado) copia[it.id] = { ...copia[it.id], estado: "ok" };
+    });
     setResultados(copia);
   }
 
@@ -231,11 +234,10 @@ export default function App() {
     descargar("﻿" + csv, `resumen-inspecciones-${hoy()}.csv`, "text/csv");
   }
   function exportarCSVActa(g) {
-    const cab = ["#", "Punto", "Estado", "Comentario"];
+    const cab = ["#", "Punto", "Resultado", "Comentario"];
     const filas = g.items.map((it, i) => {
       const res = resultadoDe(g.resultados, it.id);
-      const est = ESTADOS.find((e) => e.valor === res.estado);
-      return [i + 1, it.texto, est ? est.etiqueta : "—", res.comentario || ""];
+      return [i + 1, it.texto, textoResultado(it, res), res.comentario || ""];
     });
     const csv = [cab, ...filas].map((fila) => fila.map(campoCSV).join(";")).join("\n");
     descargar("﻿" + csv, `acta-${g.cabecera.equipo || "inspeccion"}-${hoy()}.csv`, "text/csv");
@@ -256,7 +258,7 @@ export default function App() {
 
   // --- Editor de plantillas ---
   function nuevaPlantilla() {
-    setEditP({ id: uid("u"), nombre: "", items: [{ id: uid("i"), texto: "" }], esNueva: true });
+    setEditP({ id: uid("u"), nombre: "", items: [{ id: uid("i"), texto: "", tipo: "estado" }], esNueva: true });
     setVista("editarPlantilla");
   }
   function editarPlantilla(plt) {
@@ -264,11 +266,17 @@ export default function App() {
     setVista("editarPlantilla");
   }
   function duplicarPlantilla(plt) {
-    setEditP({ id: uid("u"), nombre: plt.nombre + " (copia)", items: plt.items.map((it) => ({ id: uid("i"), texto: it.texto })), esNueva: true });
+    setEditP({ id: uid("u"), nombre: plt.nombre + " (copia)", items: plt.items.map((it) => ({ ...it, id: uid("i") })), esNueva: true });
     setVista("editarPlantilla");
   }
   function guardarPlantilla() {
-    const items = editP.items.filter((it) => it.texto.trim());
+    // Normaliza cada punto según su tipo (solo guarda min/max/unidad en numéricos).
+    const items = editP.items.filter((it) => it.texto.trim()).map((it) => {
+      const base = { id: it.id, texto: it.texto.trim() };
+      if (it.tipo === "numero") return { ...base, tipo: "numero", min: it.min ?? "", max: it.max ?? "", unidad: (it.unidad || "").trim() };
+      if (it.tipo === "texto") return { ...base, tipo: "texto" };
+      return base; // estado (por defecto, sin campo tipo)
+    });
     if (!editP.nombre.trim() || items.length === 0) {
       window.alert("La plantilla necesita un nombre y al menos un punto.");
       return;
@@ -391,7 +399,7 @@ export default function App() {
     const conteo = {};
     guardadas.forEach((g) => {
       g.items.forEach((it) => {
-        if (resultadoDe(g.resultados, it.id).estado === "ko") conteo[it.texto] = (conteo[it.texto] || 0) + 1;
+        if (veredictoPunto(it, resultadoDe(g.resultados, it.id)) === "ko") conteo[it.texto] = (conteo[it.texto] || 0) + 1;
       });
     });
     const ranking = Object.entries(conteo).sort((a, b) => b[1] - a[1]).slice(0, 8);
@@ -463,11 +471,11 @@ export default function App() {
 
   /* ======================= EDITAR PLANTILLA ======================= */
   if (vista === "editarPlantilla" && editP) {
-    function setItem(idx, texto) {
-      const items = editP.items.map((it, i) => (i === idx ? { ...it, texto } : it));
+    function setCampoItem(idx, campo, valor) {
+      const items = editP.items.map((it, i) => (i === idx ? { ...it, [campo]: valor } : it));
       setEditP({ ...editP, items });
     }
-    function añadirItem() { setEditP({ ...editP, items: [...editP.items, { id: uid("i"), texto: "" }] }); }
+    function añadirItem() { setEditP({ ...editP, items: [...editP.items, { id: uid("i"), texto: "", tipo: "estado" }] }); }
     function quitarItem(idx) { setEditP({ ...editP, items: editP.items.filter((_, i) => i !== idx) }); }
     function mover(idx, dir) {
       const j = idx + dir;
@@ -476,6 +484,7 @@ export default function App() {
       [items[idx], items[j]] = [items[j], items[idx]];
       setEditP({ ...editP, items });
     }
+    const inputMini = "rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-800 outline-none focus:border-orange-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100";
     return (
       <Marco {...propsTema} onVolver={() => { setEditP(null); setVista("plantillas"); }} titulo={editP.esNueva ? "Nueva plantilla" : "Editar plantilla"}>
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
@@ -484,13 +493,27 @@ export default function App() {
         <h3 className="mb-2 mt-5 font-mono text-sm font-bold uppercase tracking-wider text-slate-400">Puntos</h3>
         <div className="space-y-2">
           {editP.items.map((it, i) => (
-            <div key={it.id} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white p-2 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-              <span className="font-mono text-xs text-slate-400">{i + 1}</span>
-              <input type="text" value={it.texto} onChange={(e) => setItem(i, e.target.value)} placeholder="Texto del punto…"
-                className="flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-800 outline-none focus:border-orange-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100" />
-              <button onClick={() => mover(i, -1)} className="px-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200">▲</button>
-              <button onClick={() => mover(i, 1)} className="px-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200">▼</button>
-              <button onClick={() => quitarItem(i)} className="px-1 text-slate-300 hover:text-red-500">✕</button>
+            <div key={it.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-xs text-slate-400">{i + 1}</span>
+                <input type="text" value={it.texto} onChange={(e) => setCampoItem(i, "texto", e.target.value)} placeholder="Texto del punto…"
+                  className={"flex-1 " + inputMini} />
+                <button onClick={() => mover(i, -1)} className="px-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200">▲</button>
+                <button onClick={() => mover(i, 1)} className="px-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200">▼</button>
+                <button onClick={() => quitarItem(i)} className="px-1 text-slate-300 hover:text-red-500">✕</button>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2 pl-6">
+                <select value={it.tipo || "estado"} onChange={(e) => setCampoItem(i, "tipo", e.target.value)} className={inputMini}>
+                  {TIPOS_CAMPO.map((t) => (<option key={t.valor} value={t.valor}>{t.etiqueta}</option>))}
+                </select>
+                {(it.tipo || "estado") === "numero" && (
+                  <>
+                    <input type="number" value={it.min ?? ""} onChange={(e) => setCampoItem(i, "min", e.target.value)} placeholder="Mín" className={"w-20 " + inputMini} />
+                    <input type="number" value={it.max ?? ""} onChange={(e) => setCampoItem(i, "max", e.target.value)} placeholder="Máx" className={"w-20 " + inputMini} />
+                    <input type="text" value={it.unidad ?? ""} onChange={(e) => setCampoItem(i, "unidad", e.target.value)} placeholder="Unidad (bar, °C…)" className={"w-32 " + inputMini} />
+                  </>
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -548,6 +571,7 @@ export default function App() {
   if (vista === "rellenar") {
     const hechos = resumen.total - resumen.pend;
     const pct = Math.round((hechos / resumen.total) * 100);
+    const pendientesEstado = plantilla.items.filter((it) => tipoDe(it) === "estado" && !resultados[it.id].estado).length;
     return (
       <Marco {...propsTema} onVolver={() => setVista("inicio")} titulo={editandoId ? "Editar acta" : "Rellenar checklist"}>
         <p className="mb-2 rounded-lg bg-slate-800 px-4 py-2 font-mono text-xs text-orange-300">{plantilla.nombre}</p>
@@ -564,8 +588,8 @@ export default function App() {
           <Pildora etiqueta="N/A" valor={resumen.na} color="text-slate-500" />
           <Pildora etiqueta="Pend." valor={resumen.pend} color="text-amber-600" />
         </div>
-        {resumen.pend > 0 && (
-          <button onClick={marcarRestantesOK} className="mb-4 w-full rounded-lg border border-emerald-300 bg-emerald-50 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">✓ Marcar los {resumen.pend} restantes como OK</button>
+        {pendientesEstado > 0 && (
+          <button onClick={marcarRestantesOK} className="mb-4 w-full rounded-lg border border-emerald-300 bg-emerald-50 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">✓ Marcar los {pendientesEstado} de estado restantes como OK</button>
         )}
 
         <div className="mb-5 space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
@@ -657,12 +681,13 @@ export default function App() {
             {actaVista.editadoEn && <p className="mt-3 text-xs italic text-slate-400">Editada el {fechaHora(actaVista.editadoEn)}</p>}
             <table className="mt-5 w-full border-collapse text-sm">
               <thead>
-                <tr className="border-b-2 border-slate-300 text-left text-slate-600"><th className="py-2">#</th><th className="py-2">Punto de inspección</th><th className="py-2 text-center">Estado</th></tr>
+                <tr className="border-b-2 border-slate-300 text-left text-slate-600"><th className="py-2">#</th><th className="py-2">Punto de inspección</th><th className="py-2 text-center">Resultado</th></tr>
               </thead>
               <tbody>
                 {actaVista.items.map((item, i) => {
                   const res = resultadoDe(actaVista.resultados, item.id);
-                  const est = ESTADOS.find((e) => e.valor === res.estado);
+                  const v = veredictoPunto(item, res);
+                  const colorV = v === "ok" ? "text-emerald-700" : v === "ko" ? "text-red-600" : v === "info" ? "text-slate-700" : "text-slate-400";
                   return (
                     <tr key={item.id} className="border-b border-slate-100 align-top">
                       <td className="py-2 font-mono text-slate-400">{i + 1}</td>
@@ -670,7 +695,7 @@ export default function App() {
                         {res.comentario && <span className="block text-xs italic text-slate-500">↳ {res.comentario}</span>}
                         {res.foto && <img src={res.foto} alt="evidencia" className="mt-1 h-16 rounded border border-slate-200" />}
                       </td>
-                      <td className="py-2 text-center font-bold text-slate-800">{est ? est.etiqueta : "—"}</td>
+                      <td className={"py-2 text-center font-bold " + colorV}>{textoResultado(item, res)}</td>
                     </tr>
                   );
                 })}

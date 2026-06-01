@@ -9,8 +9,7 @@
    el bundle principal (solo se descargan al generar el primer PDF).
    ========================================================================= */
 
-import { ESTADOS } from "../data/plantillas";
-import { calcularResumen, resultadoDe, fechaHora, numeroActa } from "./helpers";
+import { calcularResumen, resultadoDe, veredictoPunto, textoResultado, fechaHora, numeroActa } from "./helpers";
 
 const MARGEN = 14;          // mm
 const ANCHO_PAGINA = 210;   // A4
@@ -134,31 +133,32 @@ export async function generarPDFActa(registro, empresaFallback) {
   }
 
   // ---- Tabla de puntos ----
+  // Veredicto por fila, para colorear la columna "Resultado".
+  const veredictos = registro.items.map((it) => veredictoPunto(it, resultadoDe(registro.resultados, it.id)));
   const cuerpo = registro.items.map((it, i) => {
     const res = resultadoDe(registro.resultados, it.id);
-    const est = ESTADOS.find((e) => e.valor === res.estado);
-    return [i + 1, it.texto, est ? est.etiqueta : "-", res.comentario || ""];
+    return [i + 1, it.texto, textoResultado(it, res), res.comentario || ""];
   });
 
   autoTable(doc, {
     startY: y + 1,
     margin: { left: MARGEN, right: MARGEN },
-    head: [["#", "Punto de inspección", "Estado", "Comentario"]],
+    head: [["#", "Punto de inspección", "Resultado", "Comentario"]],
     body: cuerpo,
     styles: { font: "helvetica", fontSize: 9, cellPadding: 2, textColor: COLOR.slate900, lineColor: COLOR.slate200, lineWidth: 0.1 },
     headStyles: { fillColor: COLOR.slate900, textColor: [255, 255, 255], fontStyle: "bold" },
     alternateRowStyles: { fillColor: [248, 250, 252] },
     columnStyles: {
       0: { cellWidth: 9, halign: "center", textColor: COLOR.slate400 },
-      2: { cellWidth: 20, halign: "center", fontStyle: "bold" },
+      2: { cellWidth: 24, halign: "center", fontStyle: "bold" },
       3: { textColor: COLOR.slate500, fontStyle: "italic" },
     },
     didParseCell: (data) => {
       if (data.section === "body" && data.column.index === 2) {
-        const v = data.cell.raw;
-        if (v === "OK") data.cell.styles.textColor = COLOR.emerald;
-        else if (v === "No OK") data.cell.styles.textColor = COLOR.red;
-        else if (v === "N/A") data.cell.styles.textColor = COLOR.slate500;
+        const v = veredictos[data.row.index];
+        if (v === "ok") data.cell.styles.textColor = COLOR.emerald;
+        else if (v === "ko") data.cell.styles.textColor = COLOR.red;
+        else data.cell.styles.textColor = COLOR.slate500;
       }
     },
   });
