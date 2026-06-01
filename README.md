@@ -73,6 +73,24 @@ npm run icons    # regenerar los iconos PWA desde public/icon.svg
 
 ## Cómo generar un PDF del acta
 
-Abre un acta y pulsa **🖨️ Imprimir / PDF**. En el diálogo de impresión del
-navegador, elige *"Guardar como PDF"* como destino. El acta está maquetada para
-imprimirse limpia (sin cabecera ni botones de la app).
+Abre un acta y pulsa **📄 Descargar PDF**: genera el PDF directamente (texto
+vectorial, tabla, evidencias fotográficas y firmas). Como alternativa, el botón
+**🖨️** abre el diálogo de impresión del navegador (elige *"Guardar como PDF"*).
+
+## Despliegue en Vercel
+
+El proyecto incluye `vercel.json` (rewrite SPA + cabecera del service worker).
+Para publicarlo:
+
+1. Sube el repo a GitHub (ya está en
+   [App-CheckList](https://github.com/santilafu/App-CheckList)).
+2. En [vercel.com](https://vercel.com) → **Add New… → Project** → importa el repo.
+3. Vercel detecta Vite automáticamente:
+   - **Build Command**: `npm run build`
+   - **Output Directory**: `dist`
+   - (no hace falta tocar nada)
+4. **Deploy**. En cada `git push` a `main` se redespliega solo.
+
+> Al ser una app estática (sin backend), encaja en el plan gratuito. Cuando
+> abras la URL en el móvil, podrás **instalarla** como PWA. Otras opciones
+> equivalentes para sitios estáticos: Netlify o Cloudflare Pages.
