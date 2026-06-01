@@ -9,6 +9,7 @@ import {
 import { Marco, Campo, DatoActa, Pildora } from "./components/ui";
 import { Firma } from "./components/Firma";
 import { PuntoChecklist } from "./components/PuntoChecklist";
+import { generarPDFActa } from "./lib/pdf";
 
 /* =========================================================================
    APP DE CHECKLISTS / RONDAS DE INSPECCIÓN
@@ -61,6 +62,7 @@ export default function App() {
   const [actaVista, setActaVista] = useState(null);
   const [editP, setEditP] = useState(null);     // plantilla en edición
   const [editandoId, setEditandoId] = useState(null); // id del acta que se edita (o null = nueva)
+  const [generandoPDF, setGenerandoPDF] = useState(false);
 
   // Filtros del listado
   const [busqueda, setBusqueda] = useState("");
@@ -216,6 +218,19 @@ export default function App() {
     });
     const csv = [cab, ...filas].map((fila) => fila.map(campoCSV).join(";")).join("\n");
     descargar("﻿" + csv, `acta-${g.cabecera.equipo || "inspeccion"}-${hoy()}.csv`, "text/csv");
+  }
+
+  // --- PDF directo (carga jsPDF bajo demanda) ---
+  async function descargarPDF(g) {
+    setGenerandoPDF(true);
+    try {
+      await generarPDFActa(g, empresa);
+    } catch (e) {
+      console.error(e);
+      window.alert("No se pudo generar el PDF. Inténtalo de nuevo.");
+    } finally {
+      setGenerandoPDF(false);
+    }
   }
 
   // --- Editor de plantillas ---
@@ -573,7 +588,8 @@ export default function App() {
         `}</style>
         <Marco {...propsTema} onVolver={() => setVista("inicio")} titulo="Acta de inspección">
           <div className="no-print mb-4 flex flex-wrap gap-2">
-            <button onClick={() => window.print()} className="flex-1 rounded-xl bg-slate-800 py-3 font-bold text-white hover:bg-slate-900">🖨️ Imprimir / PDF</button>
+            <button onClick={() => descargarPDF(actaVista)} disabled={generandoPDF} className="flex-1 rounded-xl bg-orange-500 py-3 font-bold text-white hover:bg-orange-600 disabled:opacity-60">{generandoPDF ? "Generando…" : "📄 Descargar PDF"}</button>
+            <button onClick={() => window.print()} className="rounded-xl bg-slate-800 px-4 py-3 font-bold text-white hover:bg-slate-900" title="Imprimir desde el navegador">🖨️</button>
             <button onClick={() => editarActa(actaVista)} className="rounded-xl border border-slate-300 px-4 py-3 font-bold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">✏️ Editar</button>
             <button onClick={() => repetir(actaVista)} className="rounded-xl border border-slate-300 px-4 py-3 font-bold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">🔁 Repetir</button>
             <button onClick={() => exportarCSVActa(actaVista)} className="rounded-xl border border-slate-300 px-4 py-3 font-bold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">CSV</button>
