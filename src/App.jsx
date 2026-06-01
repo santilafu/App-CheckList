@@ -9,7 +9,7 @@ import {
 import { Marco, Campo, DatoActa, Pildora } from "./components/ui";
 import { Firma } from "./components/Firma";
 import { PuntoChecklist } from "./components/PuntoChecklist";
-import { generarPDFActa } from "./lib/pdf";
+import { generarPDFActa, compartirPDFActa } from "./lib/pdf";
 
 /* =========================================================================
    APP DE CHECKLISTS / RONDAS DE INSPECCIÓN
@@ -67,6 +67,7 @@ export default function App() {
   const [editP, setEditP] = useState(null);     // plantilla en edición
   const [editandoId, setEditandoId] = useState(null); // id del acta que se edita (o null = nueva)
   const [generandoPDF, setGenerandoPDF] = useState(false);
+  const [compartiendo, setCompartiendo] = useState(false);
 
   // Filtros del listado
   const [busqueda, setBusqueda] = useState("");
@@ -253,6 +254,20 @@ export default function App() {
       window.alert("No se pudo generar el PDF. Inténtalo de nuevo.");
     } finally {
       setGenerandoPDF(false);
+    }
+  }
+
+  // --- Compartir acta (Web Share API; descarga como fallback) ---
+  async function compartirPDF(g) {
+    setCompartiendo(true);
+    try {
+      await compartirPDFActa(g, empresa);
+    } catch (e) {
+      if (e && e.name === "AbortError") return; // el usuario canceló el menú
+      console.error(e);
+      window.alert("No se pudo compartir el acta.");
+    } finally {
+      setCompartiendo(false);
     }
   }
 
@@ -639,6 +654,12 @@ export default function App() {
   if (vista === "acta" && actaVista) {
     const r = calcularResumen(actaVista.items, actaVista.resultados);
     const nombreEmpresa = actaVista.empresa || empresa;
+    // ¿El dispositivo puede compartir archivos por el menú nativo? (móvil sí,
+    // escritorio normalmente no → allí solo se ofrece descargar el PDF).
+    const soportaCompartir = (() => {
+      try { return !!navigator.canShare && navigator.canShare({ files: [new File([""], "a.pdf", { type: "application/pdf" })] }); }
+      catch { return false; }
+    })();
     return (
       <>
         <style>{`
@@ -651,7 +672,13 @@ export default function App() {
         `}</style>
         <Marco {...propsTema} onVolver={() => setVista("inicio")} titulo="Acta de inspección">
           <div className="no-print mb-4 flex flex-wrap gap-2">
-            <button onClick={() => descargarPDF(actaVista)} disabled={generandoPDF} className="flex-1 rounded-xl bg-orange-500 py-3 font-bold text-white hover:bg-orange-600 disabled:opacity-60">{generandoPDF ? "Generando…" : "📄 Descargar PDF"}</button>
+            {soportaCompartir && (
+              <button onClick={() => compartirPDF(actaVista)} disabled={compartiendo} className="flex-1 rounded-xl bg-orange-500 py-3 font-bold text-white hover:bg-orange-600 disabled:opacity-60">{compartiendo ? "Preparando…" : "📤 Compartir"}</button>
+            )}
+            <button onClick={() => descargarPDF(actaVista)} disabled={generandoPDF}
+              className={(soportaCompartir ? "bg-slate-800 px-4 hover:bg-slate-900" : "flex-1 bg-orange-500 hover:bg-orange-600") + " rounded-xl py-3 font-bold text-white disabled:opacity-60"}>
+              {generandoPDF ? "Generando…" : soportaCompartir ? "📄 PDF" : "📄 Descargar PDF"}
+            </button>
             <button onClick={() => window.print()} className="rounded-xl bg-slate-800 px-4 py-3 font-bold text-white hover:bg-slate-900" title="Imprimir desde el navegador">🖨️</button>
             <button onClick={() => editarActa(actaVista)} className="rounded-xl border border-slate-300 px-4 py-3 font-bold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">✏️ Editar</button>
             <button onClick={() => repetir(actaVista)} className="rounded-xl border border-slate-300 px-4 py-3 font-bold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">🔁 Repetir</button>

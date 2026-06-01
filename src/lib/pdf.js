@@ -53,7 +53,9 @@ function nombreArchivo(registro) {
   return `acta-${equipo}-${(registro.cabecera.fecha || "").slice(0, 10)}.pdf`;
 }
 
-export async function generarPDFActa(registro, empresaFallback) {
+// Construye el documento PDF (jsPDF) del acta y lo devuelve sin guardar, para
+// poder reutilizarlo tanto al descargar como al compartir.
+async function construirDoc(registro, empresaFallback) {
   // Carga diferida de las librerías pesadas.
   const { jsPDF } = await import("jspdf");
   const { default: autoTable } = await import("jspdf-autotable");
@@ -266,5 +268,31 @@ export async function generarPDFActa(registro, empresaFallback) {
     doc.text(`Página ${p} de ${totalPag}`, ANCHO_PAGINA - MARGEN, ALTO_PAGINA - 8, { align: "right" });
   }
 
+  return doc;
+}
+
+// Genera y descarga el PDF del acta.
+export async function generarPDFActa(registro, empresaFallback) {
+  const doc = await construirDoc(registro, empresaFallback);
   doc.save(nombreArchivo(registro));
+}
+
+// Comparte el PDF del acta con el menú nativo del dispositivo (Web Share API
+// con archivos: WhatsApp, email, Drive…). Si no está disponible (p. ej. en
+// escritorio), lo descarga. Devuelve true si se compartió, false si descargó.
+export async function compartirPDFActa(registro, empresaFallback) {
+  const doc = await construirDoc(registro, empresaFallback);
+  const nombre = nombreArchivo(registro);
+  const file = new File([doc.output("blob")], nombre, { type: "application/pdf" });
+
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    await navigator.share({
+      files: [file],
+      title: "Acta de inspección",
+      text: `Acta de inspección — ${registro.cabecera.equipo || ""}`.trim(),
+    });
+    return true;
+  }
+  doc.save(nombre);
+  return false;
 }
