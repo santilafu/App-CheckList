@@ -47,6 +47,14 @@ function formatoImagen(dataURL) {
   return f === "JPG" ? "JPEG" : f;
 }
 
+// Convierte un color hex (#rrggbb) a [r, g, b]. null si no es válido.
+function hexToRgb(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec((hex || "").trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
 // Limpia el nombre de equipo para usarlo en el nombre de archivo.
 function nombreArchivo(registro) {
   const equipo = (registro.cabecera.equipo || "inspeccion").replace(/[^\w-]+/g, "_").slice(0, 40);
@@ -55,14 +63,16 @@ function nombreArchivo(registro) {
 
 // Construye el documento PDF (jsPDF) del acta y lo devuelve sin guardar, para
 // poder reutilizarlo tanto al descargar como al compartir.
-async function construirDoc(registro, empresaFallback) {
+async function construirDoc(registro, opts) {
   // Carga diferida de las librerías pesadas.
   const { jsPDF } = await import("jspdf");
   const { default: autoTable } = await import("jspdf-autotable");
 
+  const { empresa: empresaFallback, logo, colorMarca } = opts || {};
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   const r = calcularResumen(registro.items, registro.resultados);
   const empresa = registro.empresa || empresaFallback;
+  const marca = hexToRgb(colorMarca) || COLOR.orange;
   let y = MARGEN;
 
   // Salto de página si no caben `necesario` mm.
@@ -70,8 +80,18 @@ async function construirDoc(registro, empresaFallback) {
     if (y + necesario > ALTO_PAGINA - MARGEN) { doc.addPage(); y = MARGEN; }
   }
 
-  // ---- Cabecera ----
-  if (empresa) {
+  // ---- Cabecera (logo + empresa) ----
+  if (logo) {
+    const d = await dimsImagen(logo);
+    const hLogo = 12; // mm
+    const wLogo = d ? (d.w / d.h) * hLogo : 24;
+    try { doc.addImage(logo, formatoImagen(logo), MARGEN, y, wLogo, hLogo); } catch { /* ignore */ }
+    if (empresa) {
+      doc.setFont("helvetica", "bold").setFontSize(10).setTextColor(...COLOR.slate700);
+      doc.text(empresa.toUpperCase(), MARGEN + wLogo + 4, y + hLogo / 2 + 1);
+    }
+    y += hLogo + 4;
+  } else if (empresa) {
     doc.setFont("helvetica", "bold").setFontSize(10).setTextColor(...COLOR.slate700);
     doc.text(empresa.toUpperCase(), MARGEN, y);
     y += 6;
@@ -101,9 +121,9 @@ async function construirDoc(registro, empresaFallback) {
     doc.text(`Nº ${numeroActa(registro.numero)}`, ANCHO_PAGINA - MARGEN, y + 9, { align: "right" });
   }
 
-  // Línea naranja separadora.
+  // Línea separadora con el color de marca.
   y += 13;
-  doc.setDrawColor(...COLOR.orange).setLineWidth(0.8);
+  doc.setDrawColor(...marca).setLineWidth(0.8);
   doc.line(MARGEN, y, ANCHO_PAGINA - MARGEN, y);
   y += 7;
 
@@ -271,17 +291,17 @@ async function construirDoc(registro, empresaFallback) {
   return doc;
 }
 
-// Genera y descarga el PDF del acta.
-export async function generarPDFActa(registro, empresaFallback) {
-  const doc = await construirDoc(registro, empresaFallback);
+// Genera y descarga el PDF del acta. opts: { empresa, logo, colorMarca }.
+export async function generarPDFActa(registro, opts) {
+  const doc = await construirDoc(registro, opts);
   doc.save(nombreArchivo(registro));
 }
 
 // Comparte el PDF del acta con el menú nativo del dispositivo (Web Share API
 // con archivos: WhatsApp, email, Drive…). Si no está disponible (p. ej. en
 // escritorio), lo descarga. Devuelve true si se compartió, false si descargó.
-export async function compartirPDFActa(registro, empresaFallback) {
-  const doc = await construirDoc(registro, empresaFallback);
+export async function compartirPDFActa(registro, opts) {
+  const doc = await construirDoc(registro, opts);
   const nombre = nombreArchivo(registro);
   const file = new File([doc.output("blob")], nombre, { type: "application/pdf" });
 

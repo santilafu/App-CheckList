@@ -10,6 +10,7 @@ import { Marco, Campo, DatoActa, Pildora } from "./components/ui";
 import { Firma } from "./components/Firma";
 import { PuntoChecklist } from "./components/PuntoChecklist";
 import { Nube } from "./components/Nube";
+import { MarcaEmpresa } from "./components/MarcaEmpresa";
 import { generarPDFActa, compartirPDFActa } from "./lib/pdf";
 import { supabase, hayNube } from "./lib/supabase";
 import { bajar, subir, fusionar, modInspeccion, modPlantilla } from "./lib/sync";
@@ -45,6 +46,12 @@ export default function App() {
 
   const [empresa, setEmpresa] = useState(() => almacen.leer("empresa", ""));
   useEffect(() => { almacen.guardar("empresa", empresa); }, [empresa]);
+
+  // Marca de empresa (branding): logo y color, aplicados al acta y al PDF.
+  const [logo, setLogo] = useState(() => almacen.leer("logo", null));
+  useEffect(() => { almacen.guardar("logo", logo); }, [logo]);
+  const [colorMarca, setColorMarca] = useState(() => almacen.leer("colorMarca", "#f97316"));
+  useEffect(() => { almacen.guardar("colorMarca", colorMarca); }, [colorMarca]);
 
   // Contador correlativo de actas (solo se incrementa al crear actas nuevas).
   const [contadorActa, setContadorActa] = useState(() => almacen.leer("contadorActa", 0));
@@ -332,7 +339,7 @@ export default function App() {
   async function descargarPDF(g) {
     setGenerandoPDF(true);
     try {
-      await generarPDFActa(g, empresa);
+      await generarPDFActa(g, { empresa, logo, colorMarca });
     } catch (e) {
       console.error(e);
       window.alert("No se pudo generar el PDF. Inténtalo de nuevo.");
@@ -345,7 +352,7 @@ export default function App() {
   async function compartirPDF(g) {
     setCompartiendo(true);
     try {
-      await compartirPDFActa(g, empresa);
+      await compartirPDFActa(g, { empresa, logo, colorMarca });
     } catch (e) {
       if (e && e.name === "AbortError") return; // el usuario canceló el menú
       console.error(e);
@@ -646,6 +653,8 @@ export default function App() {
           </div>
         </div>
 
+        <MarcaEmpresa logo={logo} color={colorMarca} onLogo={setLogo} onColor={setColorMarca} />
+
         <Nube hayNube={hayNube} usuario={usuario} estado={estadoSync} sincronizando={sincronizando}
           onLogin={entrarNube} onRegistro={registrarNube} onLogout={salirNube} onSync={sincronizar} />
       </Marco>
@@ -776,8 +785,13 @@ export default function App() {
           </div>
 
           <div id="acta" className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-            {nombreEmpresa && <p className="mb-1 font-mono text-sm font-bold uppercase tracking-wider text-slate-700">{nombreEmpresa}</p>}
-            <div className="flex items-start justify-between border-b-4 border-orange-500 pb-3">
+            {(logo || nombreEmpresa) && (
+              <div className="mb-2 flex items-center gap-3">
+                {logo && <img src={logo} alt="logo" className="max-h-12 max-w-[140px] object-contain" />}
+                {nombreEmpresa && <p className="font-mono text-sm font-bold uppercase tracking-wider text-slate-700">{nombreEmpresa}</p>}
+              </div>
+            )}
+            <div className="flex items-start justify-between border-b-4 pb-3" style={{ borderBottomColor: colorMarca }}>
               <div>
                 <h1 className="text-xl font-bold text-slate-900">Acta de inspección</h1>
                 <p className="text-sm text-slate-500">{actaVista.plantilla}</p>
