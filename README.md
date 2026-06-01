@@ -110,6 +110,34 @@ sesión, tus datos se sincronizan; los cambios se suben solos y puedes forzar co
 > un dispositivo borra en el otro). Las fotos van incrustadas en el acta (base64);
 > si subes muchas, vigila el límite de almacenamiento del plan gratuito.
 
+## Plan Pro / pagos con Stripe (en construcción)
+
+Backend listo (funciones serverless de Vercel en `api/`), **frontend de gating
+pendiente**. El plan de cada usuario se guarda en la tabla `perfiles` de Supabase.
+
+**Hecho:**
+- `api/create-checkout.js` — crea la sesión de pago (Stripe Checkout).
+- `api/stripe-webhook.js` — actualiza el plan al pagar/cancelar (verifica firma).
+- `api/portal.js` — portal para gestionar/cancelar la suscripción.
+- `supabase/schema-pro.sql` — tabla `perfiles` + RLS + trigger de alta.
+
+**Pendiente (siguiente sesión):** estado `esPro` en el frontend, bloquear el
+branding (logo/color) y la marca de agua del PDF tras el plan Pro, y la tarjeta
+"Hazte Pro" en Ajustes.
+
+**Configuración cuando se retome:**
+1. Ejecuta `supabase/schema-pro.sql` en el SQL Editor de Supabase.
+2. Crea cuenta en [Stripe](https://stripe.com) → un **Producto** con un **Precio**
+   de suscripción (mensual). Copia el `price_...`.
+3. En **Vercel → Environment Variables** añade: `STRIPE_SECRET_KEY`,
+   `STRIPE_PRICE_ID`, `STRIPE_WEBHOOK_SECRET`, `SUPABASE_URL`,
+   `SUPABASE_SERVICE_ROLE_KEY` (ver `.env.example`).
+4. En **Stripe → Developers → Webhooks** crea un endpoint apuntando a
+   `https://TU-APP.vercel.app/api/stripe-webhook` escuchando
+   `checkout.session.completed` y `customer.subscription.*`; copia el `whsec_...`.
+
+> Las funciones `api/` solo corren en Vercel (o con `vercel dev`), no con `npm run dev`.
+
 ## Despliegue en Vercel
 
 El proyecto incluye `vercel.json` (rewrite SPA + cabecera del service worker).
